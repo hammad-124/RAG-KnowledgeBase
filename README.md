@@ -78,5 +78,3 @@ it doesnt hane semantic meaning so model has no idea what is meant
 <!-- 
 For this problems BM25 comes into picture -->
 
-
-
