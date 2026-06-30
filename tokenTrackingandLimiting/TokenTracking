@@ -1,0 +1,101 @@
+import logging
+import tiktoken
+from typing import Dict, Any, Tuple
+from langchain_openai import ChatOpenAI
+from dotenv import load_dotenv
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+class TokenBudget:
+    """Tracks and limits token usage using exact model encoding counts."""
+
+    def __init__(self, model_name: str = "gpt-4o", max_tokens_per_request: int = 4000):
+        self.max_per_request = max_tokens_per_request
+        self.model_name = model_name
+        self.usage = {"total_input": 0, "total_output": 0, "requests": 0}
+        
+        try:
+            self.encoder = tiktoken.encoding_for_model(model_name)
+        except KeyError:
+            logger.warning(f"Model {model_name} encoder not found. Falling back to cl100k_base.")
+            self.encoder = tiktoken.get_encoding("cl100k_base")
+
+    def count_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        return len(self.encoder.encode(text))
+
+    def check_budget(self, text: str) -> Tuple[bool, int]:
+        tokens = self.count_tokens(text)
+        return tokens <= self.max_per_request, tokens
+
+    def record_usage(self, input_tokens: int, output_tokens: int):
+        self.usage["total_input"] += input_tokens
+        self.usage["total_output"] += output_tokens
+        self.usage["requests"] += 1
+
+    def get_stats(self) -> Dict[str, Any]:
+        total = self.usage["total_input"] + self.usage["total_output"]
+        avg = total / max(self.usage["requests"], 1)
+        return {
+            **self.usage,
+            "total_tokens": total,
+            "avg_per_request": round(avg, 1)
+        }
+
+
+class BudgetedLLM:
+    """Production Guarded LLM interface preventing structural over-budget calls."""
+
+    def __init__(self, model_name: str = "gpt-4o-mini", max_tokens: int = 4000):
+        self.llm = ChatOpenAI(model=model_name, temperature=0)
+        self.budget = TokenBudget(model_name=model_name, max_tokens_per_request=max_tokens)
+
+    def invoke(self, query: str) -> str:
+        # 1. Pre-flight check
+        within_budget, exact_input_tokens = self.budget.check_budget(query)
+
+        if not within_budget:
+            raise ValueError(
+                f"Rate Limit Abort: Query tokens ({exact_input_tokens}) exceeds maximum limit ({self.budget.max_per_request})."
+            )
+
+        # 2. API Call
+        response = self.llm.invoke(query)
+        
+        # 3. Pull Exact Metadata from OpenAI response
+        usage_metadata = response.response_metadata.get("token_usage", {})
+        exact_input = usage_metadata.get("prompt_tokens", exact_input_tokens)
+        exact_output = usage_metadata.get("completion_tokens", self.budget.count_tokens(response.content))
+
+        # 4. Log usage metrics
+        self.budget.record_usage(exact_input, exact_output)
+
+        return response.content
+
+    def get_stats(self) -> Dict[str, Any]:
+        return self.budget.get_stats()
+
+
+if __name__ == "__main__":
+    secure_client = BudgetedLLM(model_name="gpt-4o-mini", max_tokens=45)
+    
+    # Within bounds
+    try:
+        res1 = secure_client.invoke("Hello! Give me a 3-word inspirational motto.")
+        print(f"\n✅ Request 1 Success!\nResponse: {res1.strip()}")
+    except ValueError as err:
+        print(f"\n❌ Request 1 Blocked: {err}")
+
+    # Exceeds bounds
+    huge_query = "Please tell me a long story about " + "code optimization " * 30
+    try:
+        res2 = secure_client.invoke(huge_query)
+        print(f"✅ Request 2 Success: {res2}")
+    except ValueError as err:
+        print(f"❌ Request 2 Successfully Intercepted: {err}")
+
+    print(f"\nFinal Metrics: {secure_client.get_stats()}")
