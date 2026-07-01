@@ -116,8 +116,8 @@ python hybridSearch.py
 | Strategy | How it works | Best for |
 | :--- | :--- | :--- |
 | **Fixed** | Split every N characters | Simple, fast prototyping |
-| **Recursive** | Split by `\n\n` → `\n` → `" "` (hierarchical) | General text, code |
-| **Semantic** | Split at topic boundaries | Long articles, reports |
+| **Recursive** | Split by `\n\n` → `\n` → `" "` (hierarchical) | General text, code | For well Structured documents with clear headings 
+| **Semantic** | Split at topic boundaries | Long articles, reports | shines more with unstructured text where topic shift arenot marked by headings
 | **Late** | Keep full doc, retrieve at query time | Question-answering |
 
 ### Separators Matter
